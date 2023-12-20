@@ -7,7 +7,7 @@ docutils
 pydata-sphinx-theme
 lightning>=2.0.0
 cloudpickle
-torch>=2.0
+torch==1.11.0
 optuna>=3.1.0
 scipy
 pandas>=1.3
