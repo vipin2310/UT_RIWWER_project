@@ -1,3 +1,7 @@
+# Custom
+lightning_logs/
+
+# From github
 *.bundle.*
 lib/
 node_modules/
