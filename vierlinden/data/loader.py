@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 import logging
 from vierlinden.config import data_path, target_filename, sensor_filename
 
@@ -24,9 +25,6 @@ class DataProcessor:
         return self.data
     
     def prepare_for_target(self, target_col):
-        if target_col not in self.data.columns:
-            logger.error(f"Column {target_col} not found in data.")
-            return
         
         t = self.data.drop(['Entleerung_RüB', 'Füllstand_RüB_1', 'Füllstand_RüB_2', 'Füllstand_RüB_3'], axis=1)
         
@@ -35,10 +33,21 @@ class DataProcessor:
             prediction_ready_data = t.drop(['Kreuzweg_outflow [l/s]'], axis=1)
         elif target_col == 'Kreuzweg_outflow [l/s]':
             prediction_ready_data = t.drop(['Kaiserstr_outflow [l/s]'], axis=1)
+        elif target_col not in self.data.columns:
+            logger.error(f"Column {target_col} not found in data.")
+            return
         else:
             raise ValueError('Column {target_col} is not a valid target variable.}')
         
         return prediction_ready_data
+    
+    def get_training_and_validation_timeseries_dataset(self, target_col, train_frac=0.8, num_time_series = 1):
+        
+        prediction_ready_data = self.prepare_for_target(target_col)
+        data = self.__add_series_and_timeidx(prediction_ready_data, num_time_series)
+        
+        # TODO Create dataloader
+        
     
     def export_data(self, output_path):
         """Export data to a file."""
@@ -109,3 +118,19 @@ class DataProcessor:
             axis=1)
         
         return data_with_removed_highnans
+    
+    def __add_series_and_timeidx(self, data, num_time_series):
+        
+        # Assign timeidx to each row
+        data['timeidx'] = data.index
+        
+        # Assign series grouping for each row, according to the number of time series
+        total_rows = len(data)
+        rows_per_group = total_rows // num_time_series
+
+        # Assign each row to a group
+        data['series'] = np.arange(total_rows) // rows_per_group
+        # Ensure the number of groups does not exceed num_groups
+        data['series'] = np.minimum(data['series'], num_time_series - 1)
+        
+        return data
