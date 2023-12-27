@@ -4,10 +4,15 @@ import pandas as pd
 import lightning.pytorch as pl
 from lightning.pytorch.tuner import Tuner
 import torch
+import logging
 from vierlinden.config import model_output_path
 from pytorch_forecasting import NHiTS, TimeSeriesDataSet
 from lightning.pytorch.callbacks import EarlyStopping, LearningRateMonitor, TQDMProgressBar,StochasticWeightAveraging
 from lightning.pytorch.loggers import TensorBoardLogger
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger_internal = logging.getLogger(__name__)
 
 class TimeSeriesDataSetCreator:
     
@@ -61,7 +66,7 @@ class TimeSeriesDataSetCreator:
         data = data.copy()
         
         # Assign timeidx to each row
-        data['timeidx'] = data.index
+        data['time_idx'] = data.index
         
         # Assign series grouping for each row, according to the number of time series
         total_rows = len(data)
@@ -89,12 +94,14 @@ class NHitsTrainingWrapper:
                                                                          num_workers, 
                                                                          train_val_split)
         
-        self.train_loader = self.training.to_dataloader(train=True, 
+        self.train_loader = self.training_data.to_dataloader(train=True, 
                                                         batch_size=batch_size, 
                                                         num_workers=num_workers)
-        self.validation_loader = self.validation.to_dataloader(train=False, 
+        self.validation_loader = self.validation_data.to_dataloader(train=False, 
                                                                batch_size=batch_size, 
                                                                num_workers=num_workers)
+        
+        logger_internal.info("Training and validation data and data loaders created successfully.")
         
     def find_optimal_learningrate(self,
                                   seed : int = None,
@@ -113,14 +120,14 @@ class NHitsTrainingWrapper:
                      gradient_clip_val=gradient_clip_val,
                      logger = False)
         
-        net = NHiTS.from_dataset(self.training,
+        net = NHiTS.from_dataset(self.training_data,
                          learning_rate=3e-2,
                          weight_decay=1e-2,
                          backcast_loss_ratio=1.0)
         
         lr_finder = Tuner(trainer).lr_find(net,
-                             train_dataloaders=self.train_dataloader,
-                             val_dataloaders=self.val_dataloader,
+                             train_dataloaders=self.train_loader,
+                             val_dataloaders=self.validation_loader,
                              min_lr=min_lr)
         
         return lr_finder.suggestion()
@@ -141,7 +148,9 @@ class NHitsTrainingWrapper:
               enable_model_summary : bool = True,
               use_logging : bool = True,
               logging_steps : int = 5) -> pl.Trainer:
-              
+        
+        logger_internal.info("Start setting up trainer and network.")
+        
         if seed is not None:
             pl.seed_everything(seed)
             
@@ -171,7 +180,7 @@ class NHitsTrainingWrapper:
             log_every_n_steps = logging_steps
             log_val_interval = 1
             
-            logger = TensorBoardLogger(model_output_path / "training_logs")
+            logger = TensorBoardLogger(model_output_path + "/" + "training_logs")
             
         callbacks.append(StochasticWeightAveraging(swa_lrs=learning_rate,swa_epoch_start=5, device=device))
         
@@ -197,11 +206,15 @@ class NHitsTrainingWrapper:
             backcast_loss_ratio=1.0
         )
         
+        logger_internal.info("Setup succesful. Starting training procedure.")
+        
         trainer.fit(
             net,
             train_dataloaders=self.train_loader,
             val_dataloaders=self.validation_loader
         )
+        
+        logger_internal.info("Training procedure completed.")
         
         self.final_trainer = trainer
         self.final_net = net

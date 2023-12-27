@@ -23,5 +23,4 @@ def main(arg : str):
     
 
 if __name__ == "__main__":
-    main("Kaiserstr_outflow [l/s]")
-    # main("Kreuzweg_outflow [l/s]")
+    print("Test")

@@ -38,8 +38,10 @@ class VierlindenDataProcessor:
             return self.data
         
         sensor_data, target_data = self.__read_data()
-        all_data = VierlindenDataProcessor.__merge_data(sensor_data, target_data)
-        self.data = VierlindenDataProcessor.__process_nan(all_data)
+        all_data = self.__merge_data(sensor_data, target_data)
+        self.data = self.__process_nan(all_data)
+        
+        logger.info("Data loaded and processed successfully.")
         
         return self.data
     
@@ -72,7 +74,7 @@ class VierlindenDataProcessor:
         
         return prediction_ready_data
     
-    def split_data(self, df : pd.DateFrame, train_frac : float = 0.9) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    def split_data(self, df : pd.DataFrame, train_frac : float = 0.9) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """Splits the data into training and test set.
 
         Parameters
@@ -118,8 +120,8 @@ class VierlindenDataProcessor:
         """
         
         try:
-            sensor_data = pd.read_csv(data_path / sensor_filename, sep=",")
-            target_data = pd.read_csv(data_path / target_filename, sep=",")
+            sensor_data = pd.read_csv(data_path + "/" + sensor_filename, sep=",")
+            target_data = pd.read_csv(data_path + "/" +  target_filename, sep=",")
             logger.info(f"Data loaded successfully from {data_path}")
             return sensor_data, target_data
         except FileNotFoundError:
@@ -151,6 +153,7 @@ class VierlindenDataProcessor:
             # Merge
             merged_data = pd.merge(sensor_data, target_data, left_on='Datetime', right_on='Timestamp', how='left')
             merged_data.drop(columns=['Timestamp'], inplace=True)
+            logger.info("Sensor and target data merged successfully.")
             return merged_data
         except Exception as e:
             logger.error(f"Error merging data: {e}")
@@ -186,6 +189,8 @@ class VierlindenDataProcessor:
         # For this it is important that the timeseries which it is evenly spaced
         complete_data = trimmed_data.interpolate(method='linear')
         complete_data['Datetime'] = pd.to_datetime(complete_data['Datetime'])
+        
+        logger.info("NaN values processed successfully.")
         
         return complete_data
     
