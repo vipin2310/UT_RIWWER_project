@@ -9,19 +9,20 @@ from typing import Tuple
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-class DataProcessor:
-    """A class to process and prepare data for time series analysis.
-
-    Parameters
-    ----------
-    load_and_process : bool, optional
-        Flag to load and process data during initialization, by default False
+class VierlindenDataProcessor:
+    """A class to load, process and prepare the Vierlinden data for time series analysis.
     """
     
     def __init__(self, load_and_process: bool = False):
-        """Constructor for DataProcessor."""
+        """Constructor for DataProcessor.
         
-        self.processed = True if load_and_process else False
+        Parameters
+        ----------
+        load_and_process : bool
+            Flag that determines whether to load and process data during initialization, by default False
+        """
+        
+        self.processed = load_and_process
         self.data = self.load_processed_data() if load_and_process else None
 
     def load_processed_data(self) -> pd.DataFrame:
@@ -37,12 +38,12 @@ class DataProcessor:
             return self.data
         
         sensor_data, target_data = self.__read_data()
-        all_data = DataProcessor.__merge_data(sensor_data, target_data)
-        self.data = DataProcessor.__process_nan(all_data)
+        all_data = VierlindenDataProcessor.__merge_data(sensor_data, target_data)
+        self.data = VierlindenDataProcessor.__process_nan(all_data)
         
         return self.data
     
-    def prepare_for_target(self, target_col: str) -> pd.DataFrame:
+    def prepare_for_target(self, df : pd.DataFrame, target_col: str) -> pd.DataFrame:
         """Prepares the data for modeling a specific target variable.
 
         Parameters
@@ -56,7 +57,7 @@ class DataProcessor:
             Data prepared for the target variable.
         """
         
-        t = self.data.drop(['Entleerung_RüB', 'Füllstand_RüB_1', 'Füllstand_RüB_2', 'Füllstand_RüB_3'], axis=1)
+        t = df.copy().drop(['Entleerung_RüB', 'Füllstand_RüB_1', 'Füllstand_RüB_2', 'Füllstand_RüB_3'], axis=1)
         
         # Filter out columns that contain other target variables than the one we want to predict
         if target_col == 'Kaiserstr_outflow [l/s]':
@@ -71,53 +72,26 @@ class DataProcessor:
         
         return prediction_ready_data
     
-    def get_training_and_validation_timeseries_dataset(self, target_col: str, train_frac: float = 0.8, num_time_series: int = 1) -> Tuple[TimeSeriesDataSet, TimeSeriesDataSet]:
-        """Generates training and validation TimeSeriesDataSet for the specified target column.
+    def split_data(self, df : pd.DateFrame, train_frac : float = 0.9) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        """Splits the data into training and test set.
 
         Parameters
         ----------
-        target_col : str
-            Target variable column name.
-        train_frac : float, optional
-            Fraction of data to be used for training, by default 0.8.
-        num_time_series : int, optional
-            Number of time series to create, by default 1.
+        train_size : float, optional
+            Fraction of data to use for training, by default 0.9
 
         Returns
         -------
-        Tuple[TimeSeriesDataSet, TimeSeriesDataSet]
-            Tuple containing training and validation TimeSeriesDataSet.
+        Tuple[pd.DataFrame, pd.DataFrame]
+            Tuple of training and validation data.
         """
         
-        prediction_ready_data = self.prepare_for_target(target_col)
-        data = self.__add_series_and_timeidx(prediction_ready_data, num_time_series)
+        training_cutoff = int(round(len(df) * train_frac))
         
-        training_cutoff = int(round(data["time_idx"].max() * train_frac))
+        train_data = df[:training_cutoff].copy()
+        test_data = df[training_cutoff:].copy()
         
-        # Parameters for TimeSeriesDataSet (setup by Teo)
-        max_encoder_length = 24*2
-        max_prediction_length = 5*2
-        context_length = max_encoder_length
-        prediction_length = max_prediction_length
-        
-        training = TimeSeriesDataSet(
-            data = data[lambda x: x.time_idx <= training_cutoff],
-            target_normalizer='auto',
-            time_idx='time_idx',
-            target=target_col,
-            group_ids=['series'],
-            time_varying_unknown_reals=list(set(data.columns) - {'Datetime', 'series', 'time_idx'}),
-            max_encoder_length=context_length,
-            min_encoder_length=max_encoder_length,
-            max_prediction_length=prediction_length,
-            min_prediction_length=max_prediction_length,
-            allow_missing_timesteps=True
-        )
-        
-        validation = TimeSeriesDataSet.from_dataset(training, data, min_prediction_idx=training_cutoff + 1)
-        
-        return training, validation
-        
+        return train_data, test_data
     
     def export_data(self, output_path: str):
         """Exports the processed data to a CSV file.
@@ -242,33 +216,3 @@ class DataProcessor:
             axis=1)
         
         return data_with_removed_highnans
-    
-    def __add_series_and_timeidx(self, data: pd.DataFrame, num_time_series: int) -> pd.DataFrame:
-        """Adds 'series' and 'timeidx' columns to the dataset for time series modeling.
-
-        Parameters
-        ----------
-        data : pd.DataFrame
-            The dataset to be processed.
-        num_time_series : int
-            The number of time series to divide the data into.
-
-        Returns
-        -------
-        pd.DataFrame
-            Dataset with 'series' and 'timeidx' columns added.
-        """
-        
-        # Assign timeidx to each row
-        data['timeidx'] = data.index
-        
-        # Assign series grouping for each row, according to the number of time series
-        total_rows = len(data)
-        rows_per_group = total_rows // num_time_series
-
-        # Assign each row to a group
-        data['series'] = np.arange(total_rows) // rows_per_group
-        # Ensure the number of groups does not exceed num_groups
-        data['series'] = np.minimum(data['series'], num_time_series - 1)
-        
-        return data
