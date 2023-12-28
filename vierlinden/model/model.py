@@ -12,7 +12,7 @@ import shutil
 import warnings
 from vierlinden.config import model_output_path
 from pytorch_forecasting import NHiTS, TimeSeriesDataSet
-from lightning.pytorch.callbacks import EarlyStopping, LearningRateMonitor, TQDMProgressBar,StochasticWeightAveraging
+from lightning.pytorch.callbacks import EarlyStopping, LearningRateMonitor, TQDMProgressBar,StochasticWeightAveraging, Callback
 from lightning.pytorch.loggers import TensorBoardLogger
 
 # Configure logging
@@ -96,6 +96,23 @@ class TimeSeriesDataSetCreator:
         
         return data
 
+class MetricCollectionCallback(Callback):
+    def __init__(self):
+        super().__init__()
+        self.metrics = {"train_loss": [], "val_loss": []}
+
+    def on_train_epoch_end(self, trainer, pl_module):
+        # Collect train loss
+        train_loss = trainer.callback_metrics.get("train_loss")
+        if train_loss is not None:
+            self.metrics["train_loss"].append(train_loss.cpu().detach().item())
+
+    def on_validation_epoch_end(self, trainer, pl_module):
+        # Collect validation loss
+        val_loss = trainer.callback_metrics.get("val_loss")
+        if val_loss is not None:
+            self.metrics["val_loss"].append(val_loss.cpu().detach().item())
+
 class NHitsTrainingWrapper:
     
     def __init__(self, 
@@ -170,6 +187,7 @@ class NHitsTrainingWrapper:
               logging_steps : int = 5) -> NHiTS:
         
         logger_internal.info("Start setting up trainer and network.")
+        self.metrics_callback = MetricCollectionCallback()
         
         if seed is not None:
             pl.seed_everything(seed)
@@ -190,6 +208,7 @@ class NHitsTrainingWrapper:
         
         callbacks.append(LearningRateMonitor(logging_interval='step'))
         callbacks.append(TQDMProgressBar())
+        callbacks.append(self.metrics_callback)
         callbacks.append(StochasticWeightAveraging(swa_lrs=learning_rate,swa_epoch_start=5, device=device))
         
         log_interval = logging_steps
@@ -233,11 +252,11 @@ class NHitsTrainingWrapper:
         self.final_trainer = trainer
         self.best_model = NHiTS.load_from_checkpoint(trainer.checkpoint_callback.best_model_path)
 
-        # Clean up logs
-        if clean_up_logging:
-            logger_internal.info("Cleaning up logging files.")
-            shutil.rmtree(log_dir)
-            logger_internal.info("Logging files cleaned up.")
+        # # Clean up logs
+        # if clean_up_logging:
+        #     logger_internal.info("Cleaning up logging files.")
+        #     shutil.rmtree(log_dir)
+        #     logger_internal.info("Logging files cleaned up.")
         
         return self.best_model
     
@@ -251,3 +270,9 @@ class NHitsTrainingWrapper:
         best_model = NHiTS.load_from_checkpoint(path)
         
         return best_model
+    
+    def plot_training_result(self):
+        if self.final_trainer is None:
+            raise Exception("No final trainer available. Please train the model first.")
+        
+        self.final_trainer.logger.plot()
