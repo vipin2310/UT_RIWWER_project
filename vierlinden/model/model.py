@@ -1,3 +1,6 @@
+from contextlib import contextmanager
+from io import StringIO
+import sys
 from typing import Tuple
 import numpy as np
 import pandas as pd
@@ -5,6 +8,8 @@ import lightning.pytorch as pl
 from lightning.pytorch.tuner import Tuner
 import torch
 import logging
+import shutil
+import warnings
 from vierlinden.config import model_output_path
 from pytorch_forecasting import NHiTS, TimeSeriesDataSet
 from lightning.pytorch.callbacks import EarlyStopping, LearningRateMonitor, TQDMProgressBar,StochasticWeightAveraging
@@ -13,6 +18,18 @@ from lightning.pytorch.loggers import TensorBoardLogger
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger_internal = logging.getLogger(__name__)
+
+for handler in logging.getLogger("lightning.pytorch").handlers:
+    handler.addFilter(lambda record: "PU available:" not in record.getMessage())
+    handler.addFilter(lambda record: "LOCAL_RANK:" not in record.getMessage())
+    handler.addFilter(lambda record: "Learning rate set to" not in record.getMessage())
+    handler.addFilter(lambda record: "Missing logger folder:" not in record.getMessage())
+    handler.addFilter(lambda record: "Restoring states from the checkpoint path at" not in record.getMessage())
+    handler.addFilter(lambda record: "Restored all states from the checkpoint at" not in record.getMessage())
+
+# Configure warnings
+warnings.filterwarnings('ignore', message=".*'loss' is an instance of `nn.Module`.*")
+warnings.filterwarnings('ignore', message=".*'logging_metrics' is an instance of `nn.Module`.*")
 
 class TimeSeriesDataSetCreator:
     
@@ -118,6 +135,9 @@ class NHitsTrainingWrapper:
                      devices = devices,
                      max_epochs = max_epochs,
                      gradient_clip_val=gradient_clip_val,
+                     enable_model_summary=False,
+                     enable_checkpointing=False,
+                     benchmark=False,
                      logger = False)
         
         net = NHiTS.from_dataset(self.training_data,
@@ -146,8 +166,8 @@ class NHitsTrainingWrapper:
               early_stopping_patience : int = 10,
               limit_train_batches : float = None,
               enable_model_summary : bool = True,
-              use_logging : bool = True,
-              logging_steps : int = 5) -> pl.Trainer:
+              clean_up_logging : bool = True,
+              logging_steps : int = 5) -> NHiTS:
         
         logger_internal.info("Start setting up trainer and network.")
         
@@ -168,21 +188,15 @@ class NHitsTrainingWrapper:
                                        verbose=True, 
                                        mode="min"))
         
-        log_interval = None
-        log_every_n_steps = None
-        log_val_interval = None
-        
-        if use_logging:
-            callbacks.append(LearningRateMonitor(logging_interval='step'))
-            callbacks.append(TQDMProgressBar())
-            
-            log_interval = logging_steps
-            log_every_n_steps = logging_steps
-            log_val_interval = 1
-            
-            logger = TensorBoardLogger(model_output_path + "/" + "training_logs")
-            
+        callbacks.append(LearningRateMonitor(logging_interval='step'))
+        callbacks.append(TQDMProgressBar())
         callbacks.append(StochasticWeightAveraging(swa_lrs=learning_rate,swa_epoch_start=5, device=device))
+        
+        log_interval = logging_steps
+        log_every_n_steps = logging_steps
+        log_val_interval = 1
+        log_dir = model_output_path + "/" + "training_logs"
+        logger = TensorBoardLogger(log_dir)
         
         trainer = pl.Trainer(
             max_epochs=max_epochs,
@@ -217,6 +231,23 @@ class NHitsTrainingWrapper:
         logger_internal.info("Training procedure completed.")
         
         self.final_trainer = trainer
-        self.final_net = net
+        self.best_model = NHiTS.load_from_checkpoint(trainer.checkpoint_callback.best_model_path)
+
+        # Clean up logs
+        if clean_up_logging:
+            logger_internal.info("Cleaning up logging files.")
+            shutil.rmtree(log_dir)
+            logger_internal.info("Logging files cleaned up.")
         
-        return trainer
+        return self.best_model
+    
+    def save_trained_model(self, path : str):
+        if self.best_model is None:
+            raise Exception("No best model available. Please train the model first.")
+        
+        self.final_trainer.save_checkpoint(path)
+        
+    def load_trained_model(path : str) -> NHiTS:
+        best_model = NHiTS.load_from_checkpoint(path)
+        
+        return best_model
