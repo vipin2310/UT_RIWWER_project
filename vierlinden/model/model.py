@@ -14,6 +14,7 @@ from vierlinden.config import model_output_path
 from pytorch_forecasting import NHiTS, TimeSeriesDataSet
 from lightning.pytorch.callbacks import EarlyStopping, LearningRateMonitor, TQDMProgressBar,StochasticWeightAveraging, Callback
 from lightning.pytorch.loggers import TensorBoardLogger
+import matplotlib.pyplot as plt
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -113,20 +114,24 @@ class MetricCollectionCallback(Callback):
         if val_loss is not None:
             self.metrics["val_loss"].append(val_loss.cpu().detach().item())
 
-class NHitsTrainingWrapper:
+class NHiTSTrainingWrapper:
     
     def __init__(self, 
                  dataframe : pd.DataFrame, 
                  target_col : str,
+                 context_length : int,
+                 prediction_length : int,
                  batch_size : int,
                  num_workers : int,
+                 num_time_series : int = 1,
                  train_val_split : float = 0.8):
         
         self.training_data, self.validation_data = TimeSeriesDataSetCreator.create(dataframe, 
-                                                                         target_col, 
-                                                                         batch_size, 
-                                                                         num_workers, 
-                                                                         train_val_split)
+                                                                         target_col = target_col, 
+                                                                         context_length = context_length, 
+                                                                         prediction_length = prediction_length, 
+                                                                         train_frac = train_val_split,
+                                                                         num_time_series = num_time_series)
         
         self.train_loader = self.training_data.to_dataloader(train=True, 
                                                         batch_size=batch_size, 
@@ -252,11 +257,11 @@ class NHitsTrainingWrapper:
         self.final_trainer = trainer
         self.best_model = NHiTS.load_from_checkpoint(trainer.checkpoint_callback.best_model_path)
 
-        # # Clean up logs
-        # if clean_up_logging:
-        #     logger_internal.info("Cleaning up logging files.")
-        #     shutil.rmtree(log_dir)
-        #     logger_internal.info("Logging files cleaned up.")
+        # Clean up logs
+        if clean_up_logging:
+            logger_internal.info("Cleaning up logging files.")
+            shutil.rmtree(log_dir)
+            logger_internal.info("Logging files cleaned up.")
         
         return self.best_model
     
@@ -271,8 +276,55 @@ class NHitsTrainingWrapper:
         
         return best_model
     
+    def print_training_evaluation(self):
+        if self.final_trainer is None:
+            raise Exception("No final trainer available. Please train the model first.")
+        
+        print(self.final_trainer.callback_metrics)
+    
     def plot_training_result(self):
         if self.final_trainer is None:
             raise Exception("No final trainer available. Please train the model first.")
         
-        self.final_trainer.logger.plot()
+        train_loss = self.metrics_callback.metrics["train_loss"]
+        val_loss = self.metrics_callback.metrics["val_loss"]
+        epochs = np.arange(0, max(len(train_loss), len(val_loss)))
+        
+        # Plotting
+        plt.figure(figsize=(10, 6))
+        plt.plot(epochs, train_loss, label='Training Loss')
+        plt.plot(epochs, val_loss, label='Validation Loss')
+        plt.title('Training and Validation Loss')
+        plt.xlabel('Epochs')
+        plt.ylabel('Loss')
+        plt.xticks(epochs)  # Set x-axis ticks to whole numbers
+        plt.legend()
+        plt.show()
+        
+class NHiTSPredictionWrapper:
+    
+    def __init__(self, trained_model : NHiTS, context_length : int, prediction_length : int):
+        
+        self.model = trained_model
+        self.context_length = context_length
+        self.prediction_length = prediction_length
+        self.model.eval()
+        
+    def predict(self, dataframe : pd.DataFrame) -> pd.DataFrame:
+        
+        _, prediction_set = TimeSeriesDataSetCreator.create(
+                                dataframe, 
+                                target_col="your_target_column", 
+                                context_length=self.context_length,
+                                prediction_length=self.prediction_length,
+                                train_frac=0, # TODO Check if this works
+                                num_time_series=1  # Assuming a single time series for prediction TODO make this configurable
+                            )
+
+        # Create DataLoader from prediction_set
+        prediction_loader = prediction_set.to_dataloader(train=False, batch_size=1, num_workers=0)
+
+        # Make predictions
+        predictions = self.model.predict(prediction_loader)
+        
+        return predictions

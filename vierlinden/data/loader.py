@@ -109,6 +109,17 @@ class VierlindenDataProcessor:
             logger.info(f"Data exported successfully to {output_path}")
         except Exception as e:
             logger.error(f"Error exporting data to {output_path}: {e}")
+            
+    def plot_target_col(self, target_col: str):
+        """Plots the target variable against Datetime.
+
+        Parameters
+        ----------
+        target_col : str
+            Name of the target column.
+        """
+        
+        self.data.plot(x='Datetime', y=target_col, figsize=(10, 6))
     
     def __read_data(self) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """Reads sensor and target data from predefined file paths.
