@@ -43,30 +43,47 @@ class TimeSeriesDataSetCreator:
               num_time_series: int = 1) -> Tuple[TimeSeriesDataSet, TimeSeriesDataSet]:
        
         data = dataframe.copy()
-        data = TimeSeriesDataSetCreator.__add_series_and_timeidx(data, num_time_series)
-       
+        data = TimeSeriesDataSetCreator.add_series_and_timeidx(data, num_time_series)
+        
         training_cutoff = int(round(data["time_idx"].max() * train_frac))
-        
-        training = TimeSeriesDataSet(
-            data = data[lambda x: x.time_idx <= training_cutoff],
-            target_normalizer='auto',
-            time_idx='time_idx',
-            target=target_col,
-            group_ids=['series'],
-            time_varying_unknown_reals=list(set(data.columns) - {'Datetime', 'series', 'time_idx'}),
-            max_encoder_length=context_length,
-            min_encoder_length=context_length,
-            max_prediction_length=prediction_length,
-            min_prediction_length=prediction_length,
-            allow_missing_timesteps=True
-        )
-        
-        validation = TimeSeriesDataSet.from_dataset(training, data, min_prediction_idx=training_cutoff + 1)
+        if train_frac > 0:
+            training = TimeSeriesDataSet(
+                data = data[lambda x: x.time_idx <= training_cutoff],
+                target_normalizer='auto',
+                time_idx='time_idx',
+                target=target_col,
+                group_ids=['series'],
+                time_varying_unknown_reals=list(set(data.columns) - {'Datetime', 'series', 'time_idx'}),
+                max_encoder_length=context_length,
+                min_encoder_length=context_length,
+                max_prediction_length=prediction_length,
+                min_prediction_length=prediction_length,
+                allow_missing_timesteps=True
+            )
+            
+            validation = TimeSeriesDataSet.from_dataset(training, data, min_prediction_idx=training_cutoff + 1)
+        elif train_frac == 0:
+            training = None
+            validation = TimeSeriesDataSet(
+                data = data,
+                target_normalizer='auto',
+                time_idx='time_idx',
+                target=target_col,
+                group_ids=['series'],
+                time_varying_unknown_reals=list(set(data.columns) - {'Datetime', 'series', 'time_idx'}),
+                max_encoder_length=context_length,
+                min_encoder_length=context_length,
+                max_prediction_length=prediction_length,
+                min_prediction_length=prediction_length,
+                allow_missing_timesteps=True
+            )
+        elif train_frac == 1:
+            raise NotImplementedError("Train fraction of 1 is not yet implemented.")
         
         return training, validation
     
     @staticmethod
-    def __add_series_and_timeidx(data: pd.DataFrame, num_time_series: int) -> pd.DataFrame:
+    def add_series_and_timeidx(data: pd.DataFrame, num_time_series: int) -> pd.DataFrame:
         """Adds 'series' and 'timeidx' columns to the dataset for time series modeling.
 
         Parameters
@@ -84,7 +101,7 @@ class TimeSeriesDataSetCreator:
         data = data.copy()
         
         # Assign timeidx to each row
-        data['time_idx'] = data.index
+        data['time_idx'] = data.index - data.index.min() + 1
         
         # Assign series grouping for each row, according to the number of time series
         total_rows = len(data)
@@ -270,7 +287,8 @@ class NHiTSTrainingWrapper:
             raise Exception("No best model available. Please train the model first.")
         
         self.final_trainer.save_checkpoint(path)
-        
+    
+    @staticmethod
     def load_trained_model(path : str) -> NHiTS:
         best_model = NHiTS.load_from_checkpoint(path)
         
@@ -310,21 +328,39 @@ class NHiTSPredictionWrapper:
         self.prediction_length = prediction_length
         self.model.eval()
         
-    def predict(self, dataframe : pd.DataFrame) -> pd.DataFrame:
+    def predict(self, dataframe : pd.DataFrame, target_col : str):
         
-        _, prediction_set = TimeSeriesDataSetCreator.create(
-                                dataframe, 
-                                target_col="your_target_column", 
+        # Calculate the frequency of the dates in the input DataFrame
+        frequency = dataframe['Datetime'].iloc[1] - dataframe['Datetime'].iloc[0]
+
+        # Generate new dates that will be predicted
+        new_dates = pd.date_range(start=dataframe['Datetime'].iloc[-1], periods=self.prediction_length, freq=frequency)[1:]
+        
+        # Create new DataFrame with the same columns as the input DataFrame and the new dates as the datetime column
+        new_df = pd.DataFrame(index=np.arange(len(new_dates)), columns=dataframe.columns)
+        new_df['Datetime'] = new_dates
+        
+        # Fillna because otherwise pytorch forecasting complains with an error
+        new_df.fillna(0, inplace=True)
+
+        # Concatenate the new DataFrame with the original DataFrame
+        prepared_df = pd.concat([dataframe, new_df]).reset_index(drop=True)
+        
+        _, test_set = TimeSeriesDataSetCreator.create(
+                                prepared_df, 
+                                target_col=target_col,
                                 context_length=self.context_length,
-                                prediction_length=self.prediction_length,
-                                train_frac=0, # TODO Check if this works
+                                prediction_length=self.prediction_length, # Prediction is now evaluated on entire data but is it still correct?
+                                train_frac=0,
                                 num_time_series=1  # Assuming a single time series for prediction TODO make this configurable
                             )
 
         # Create DataLoader from prediction_set
-        prediction_loader = prediction_set.to_dataloader(train=False, batch_size=1, num_workers=0)
-
-        # Make predictions
-        predictions = self.model.predict(prediction_loader)
+        test_loader = test_set.to_dataloader(train=False, batch_size=1, num_workers=0)    
         
-        return predictions
+        return self.model.predict(test_loader,
+                                  mode="raw",
+                                  return_x=True,
+                                  return_y=True,
+                                  return_index = True,
+                                  return_decoder_lengths=True)
