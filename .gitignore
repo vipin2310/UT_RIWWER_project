@@ -1,5 +1,6 @@
 # Custom
 lightning_logs/
+.venv/
 
 # From github
 *.bundle.*
