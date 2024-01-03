@@ -2,6 +2,7 @@ from contextlib import contextmanager
 from io import StringIO
 import sys
 from typing import Tuple
+from matplotlib.ticker import MaxNLocator
 import numpy as np
 import pandas as pd
 import lightning.pytorch as pl
@@ -12,6 +13,7 @@ import shutil
 import warnings
 from vierlinden.config import model_output_path
 from pytorch_forecasting import NHiTS, TimeSeriesDataSet
+from pytorch_forecasting.models.base_model import Prediction
 from lightning.pytorch.callbacks import EarlyStopping, LearningRateMonitor, TQDMProgressBar,StochasticWeightAveraging, Callback
 from lightning.pytorch.loggers import TensorBoardLogger
 import matplotlib.pyplot as plt
@@ -321,14 +323,145 @@ class NHiTSTrainingWrapper:
         
 class NHiTSPredictionWrapper:
     
-    def __init__(self, trained_model : NHiTS, context_length : int, prediction_length : int):
+    def __init__(self, trained_model : NHiTS, context_length : int, prediction_length : int, target_col : str):
         
         self.model = trained_model
         self.context_length = context_length
         self.prediction_length = prediction_length
+        self.target_col = target_col
         self.model.eval()
         
-    def predict(self, dataframe : pd.DataFrame, target_col : str):
+    def predict(self, dataframe : pd.DataFrame):
+        
+        # Assuming a single time series for prediction TODO make this configurable
+        num_time_series = 1
+        
+        prepared_df = self.__prepare_for_pred(dataframe)
+        
+        _, test_set = TimeSeriesDataSetCreator.create(
+                                prepared_df, 
+                                target_col=self.target_col,
+                                context_length=self.context_length,
+                                prediction_length=self.prediction_length, # Prediction is now evaluated on entire data but is it still correct?
+                                train_frac=0,
+                                num_time_series=num_time_series
+                            )
+
+        # Create DataLoader from prediction_set
+        test_loader = test_set.to_dataloader(train=False, batch_size=1, num_workers=0)
+        
+        self.raw_predictions = self.model.predict(test_loader,
+                                    mode="raw",
+                                    return_x=True,
+                                    return_y=True,
+                                    return_index = True,
+                                    return_decoder_lengths=True)
+        
+        self.predict_resultdf = self.__get_result_df(dataframe, self.raw_predictions, num_time_series)
+        return self.predict_resultdf.copy()
+    
+    def plot_forecast_for_all(self, forecast_step_ahead : int = 1, plot_forecast_distribution : bool = True):
+
+        if self.predict_resultdf is None:
+            raise Exception("No prediction result available. Please use predict() first.")
+        
+        # Get the dates, actual values and forecasted values
+        dates = self.predict_resultdf['Datetime']
+        actual_values = self.predict_resultdf[self.target_col]
+        forecast_series = self.predict_resultdf['Predicted Forecast']
+        forecast_series.index = dates
+
+        # Filter out NaN values and unpack the forecast lists
+        valid_forecast_indices = forecast_series.dropna().index
+        forecasted_values = forecast_series.dropna().tolist()
+
+        # Determine the frequency of the DataFrame
+        date_diff = dates.diff().min()
+
+        # First step forecast values and dates
+        first_step_values = [forecast[forecast_step_ahead - 1] for forecast in forecasted_values]
+        first_step_dates = valid_forecast_indices + forecast_step_ahead * date_diff
+
+        # Min, max, and quantile calculations
+        min_values = np.min(np.array(forecasted_values), axis=1)
+        max_values = np.max(np.array(forecasted_values), axis=1)
+        lower_quantile = 0.25
+        upper_quantile = 0.75
+        quantile_values_lower = np.quantile(np.array(forecasted_values), lower_quantile, axis=1)
+        quantile_values_upper = np.quantile(np.array(forecasted_values), upper_quantile, axis=1)
+
+        # Forecast dates for the calculations
+        forecast_dates = valid_forecast_indices + forecast_step_ahead * date_diff
+        
+        # Plotting
+        plt.figure(figsize=(10, 6))
+
+        if plot_forecast_distribution:
+            # Min and max range
+            plt.plot(forecast_dates, min_values, color='orange', linestyle='--', linewidth=0.2)
+            plt.plot(forecast_dates, max_values, color='orange', linestyle='--', linewidth=0.2)
+            min_max_range = plt.fill_between(forecast_dates, min_values, max_values, color='orange', alpha=0.2)
+
+            # Interquantile range
+            plt.plot(forecast_dates, quantile_values_lower, color='orange', linestyle='--', linewidth=0.2)
+            plt.plot(forecast_dates, quantile_values_upper, color='orange', linestyle='--', linewidth=0.2)
+            interquantile_range = plt.fill_between(forecast_dates, quantile_values_lower, quantile_values_upper, color='orange', alpha=0.4)
+
+        # Actual values and step ahead forecast
+        plt.plot(dates, actual_values, label='Actual Values', color='blue', linewidth=1)
+        plt.plot(first_step_dates, first_step_values, color='red', label=f'Forecast Step {forecast_step_ahead}', linewidth=1)
+    
+        # Set the maximum number of x-axis ticks to 5
+        plt.gca().xaxis.set_major_locator(MaxNLocator(nbins=6))
+        
+        # Adjusting the legend
+        handles, labels = plt.gca().get_legend_handles_labels()
+        
+        if plot_forecast_distribution:
+            legend_items = [handles[0], handles[1], min_max_range, interquantile_range]
+            legend_labels = ["Actual Values", f'Forecast {forecast_step_ahead} step ahead', "Min-Max Range", "Interquartile Range"]
+        else:
+            legend_items = [handles[0], handles[1]]
+            legend_labels = ["Actual Values", f'Forecast {forecast_step_ahead} step ahead']
+            
+        plt.legend(legend_items, legend_labels)
+
+        plt.title('Actual Values with Forecast Ranges')
+        plt.xlabel('Date')
+        plt.ylabel('Value')
+        plt.grid(False)
+        plt.show()
+
+
+    
+    def plot_forecast_per_time_idx(self, max_forecast_horizon : int = -1):
+        raise NotImplementedError("Plotting of forecast per time index is not yet implemented.")
+    
+    def get_average_mae_loss(self):
+        raise NotImplementedError("MAE calculation is not yet implemented.")
+    
+    def __get_result_df(self, dataframe : pd.DataFrame, raw_predictions : Prediction, num_time_series : int):
+        
+        result_df = TimeSeriesDataSetCreator.add_series_and_timeidx(dataframe, num_time_series)
+        predictions = self.__get_predictions_from_raw(raw_predictions)
+        result_df = result_df.merge(predictions, on=["time_idx", "series"], how="left")
+        
+        return result_df.drop(columns=["series", "time_idx"])
+
+    def __get_predictions_from_raw(self, raw_predictions : Prediction) -> pd.DataFrame:
+        
+        predictions = raw_predictions.output.prediction.detach().cpu().numpy()[:,:,0]
+        predictions = [row.tolist() for row in predictions]
+        
+        time_idx = raw_predictions.index["time_idx"]
+        series = raw_predictions.index["series"]
+        
+        return pd.DataFrame({"Predicted Forecast": predictions, 
+                             "time_idx" : time_idx, 
+                             "series" : series})
+        
+        
+    def __prepare_for_pred(self, dataframe : pd.DataFrame) -> pd.DataFrame:
         
         # Calculate the frequency of the dates in the input DataFrame
         frequency = dataframe['Datetime'].iloc[1] - dataframe['Datetime'].iloc[0]
@@ -344,23 +477,4 @@ class NHiTSPredictionWrapper:
         new_df.fillna(0, inplace=True)
 
         # Concatenate the new DataFrame with the original DataFrame
-        prepared_df = pd.concat([dataframe, new_df]).reset_index(drop=True)
-        
-        _, test_set = TimeSeriesDataSetCreator.create(
-                                prepared_df, 
-                                target_col=target_col,
-                                context_length=self.context_length,
-                                prediction_length=self.prediction_length, # Prediction is now evaluated on entire data but is it still correct?
-                                train_frac=0,
-                                num_time_series=1  # Assuming a single time series for prediction TODO make this configurable
-                            )
-
-        # Create DataLoader from prediction_set
-        test_loader = test_set.to_dataloader(train=False, batch_size=1, num_workers=0)    
-        
-        return self.model.predict(test_loader,
-                                  mode="raw",
-                                  return_x=True,
-                                  return_y=True,
-                                  return_index = True,
-                                  return_decoder_lengths=True)
+        return pd.concat([dataframe, new_df]).reset_index(drop=True)

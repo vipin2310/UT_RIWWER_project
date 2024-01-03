@@ -74,7 +74,8 @@ class VierlindenDataProcessor:
         
         return prediction_ready_data
     
-    def split_data(self, df : pd.DataFrame, train_frac : float = 0.9) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    @staticmethod
+    def split_data(df : pd.DataFrame, train_frac : float = 0.9) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """Splits the data into training and test set.
 
         Parameters
