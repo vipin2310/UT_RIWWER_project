@@ -378,9 +378,9 @@ class NHiTSPredictionWrapper:
         # Determine the frequency of the DataFrame
         date_diff = dates.diff().min()
 
-        # First step forecast values and dates
-        first_step_values = [forecast[forecast_step_ahead - 1] for forecast in forecasted_values]
-        first_step_dates = valid_forecast_indices + forecast_step_ahead * date_diff
+        # Step ahead forecast values and dates
+        step_ahead_values = [forecast[forecast_step_ahead - 1] for forecast in forecasted_values]
+        step_ahead_dates = valid_forecast_indices + forecast_step_ahead * date_diff
 
         # Min, max, and quantile calculations
         min_values = np.min(np.array(forecasted_values), axis=1)
@@ -409,7 +409,7 @@ class NHiTSPredictionWrapper:
 
         # Actual values and step ahead forecast
         plt.plot(dates, actual_values, label='Actual Values', color='blue', linewidth=1)
-        plt.plot(first_step_dates, first_step_values, color='red', label=f'Forecast Step {forecast_step_ahead}', linewidth=1)
+        plt.plot(step_ahead_dates, step_ahead_values, color='red', label=f'Forecast Step {forecast_step_ahead}', linewidth=1)
     
         # Set the maximum number of x-axis ticks to 5
         plt.gca().xaxis.set_major_locator(MaxNLocator(nbins=6))
@@ -431,14 +431,58 @@ class NHiTSPredictionWrapper:
         plt.ylabel('Value')
         plt.grid(False)
         plt.show()
-
-
     
-    def plot_forecast_per_time_idx(self, max_forecast_horizon : int = -1):
-        raise NotImplementedError("Plotting of forecast per time index is not yet implemented.")
+    def plot_forecast_per_time_idx(self, time_idx, max_forecast_horizon : int = -1):
+        
+        if self.predict_resultdf is None:
+            raise Exception("No prediction result available. Please use predict() first.")
+        
+        # Get the dates, actual values and forecasted values
+        dates = self.predict_resultdf['Datetime']
+        actual_values = self.predict_resultdf[self.target_col]
+        forecast_series = self.predict_resultdf['Predicted Forecast']
+        actual_values.index = dates
+        forecast_series.index = dates
+        
+        # Filter out NaN values and unpack the forecast lists
+        valid_forecast_indices = forecast_series.dropna().index
+        forecasted_values = forecast_series.dropna().tolist()
+        
+        # Get forecast for time_idx
+        date = dates[time_idx]
+        
+        if date not in valid_forecast_indices:
+            raise Exception(f"Date {date} is not in the valid forecast indices, maybe there weren't {self.context_length} values before it?")
+        
+        if max_forecast_horizon == -1:
+            max_forecast_horizon = self.prediction_length
+        elif max_forecast_horizon > self.prediction_length:
+            raise Exception(f"Max forecast horizon {max_forecast_horizon} is larger than the prediction length {self.prediction_length}.")
+        
+        start_date = dates[time_idx - self.context_length + 1]
+        end_date = dates[time_idx + max_forecast_horizon]
+        
+        actual_values = actual_values[start_date:end_date]
+        actual_dates = pd.date_range(start=start_date, periods=len(actual_values), freq=dates.diff().min())
+        forecast = forecasted_values[time_idx]
+        forecast_dates = pd.date_range(start=date, periods=len(forecast) + 1, freq=dates.diff().min())[1:]
+        
+        forecast = pd.Series(forecast, index=forecast_dates)
+        
+        # Plotting
+        plt.figure(figsize=(10, 6))
+        
+        plt.plot(actual_dates, actual_values, label='Actual Values', color='blue', linewidth=1)
+        plt.plot(forecast_dates, forecast, color='red', label=f'Forecast', linewidth=1)
+        
+        plt.title(f'Actual Values with Forecast Values for time_idx {time_idx}')
+        plt.xlabel('Date')
+        plt.ylabel(self.target_col)
+        plt.legend()
+        plt.show()
     
     def get_average_mae_loss(self):
-        raise NotImplementedError("MAE calculation is not yet implemented.")
+        raise NotImplementedError("Not yet implemented.")
     
     def __get_result_df(self, dataframe : pd.DataFrame, raw_predictions : Prediction, num_time_series : int):
         
