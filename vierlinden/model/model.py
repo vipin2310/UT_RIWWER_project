@@ -467,7 +467,7 @@ class NHiTSPredictionWrapper:
         
         actual_values = actual_values[start_date:end_date]
         actual_dates = pd.date_range(start=start_date, periods=len(actual_values), freq=dates.diff().min())
-        forecast = forecasted_values[time_idx]
+        forecast = self.predict_resultdf.iloc[time_idx]['Predicted Forecast']
         forecast_dates = pd.date_range(start=date, periods=len(forecast) + 1, freq=dates.diff().min())[1:]
         
         forecast = pd.Series(forecast, index=forecast_dates)
