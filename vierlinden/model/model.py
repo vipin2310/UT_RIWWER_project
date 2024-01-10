@@ -351,9 +351,9 @@ class NHiTSPredictionWrapper:
                             )
 
         # Create DataLoader from prediction_set
-        test_loader = test_set.to_dataloader(train=False, batch_size=1, num_workers=0)
+        self.test_loader = test_set.to_dataloader(train=False, batch_size=1, num_workers=0)
         
-        self.raw_predictions = self.model.predict(test_loader,
+        self.raw_predictions = self.model.predict(self.test_loader,
                                     mode="raw",
                                     return_x=True,
                                     return_y=True,
@@ -394,7 +394,7 @@ class NHiTSPredictionWrapper:
         quantile_values_upper = np.quantile(np.array(forecasted_values), upper_quantile, axis=1)
 
         # Forecast dates for the calculations
-        forecast_dates = valid_forecast_indices + forecast_step_ahead * date_diff
+        forecast_dates = valid_forecast_indices + (forecast_step_ahead - 1) * date_diff
         
         # Plotting
         plt.figure(figsize=(10, 6))
@@ -487,11 +487,46 @@ class NHiTSPredictionWrapper:
         plt.legend()
         plt.show()
     
-    def get_average_mae_loss(self):
+    def calculate_mase_loss(self, forecast_step_ahead : int = 1):
+        if self.predict_resultdf is None:
+            raise Exception("No prediction result available. Please use predict() first.")
         
+        # Get the dates, actual values and forecasted values
+        dates = self.predict_resultdf['Datetime']
+        actual_values = self.predict_resultdf[self.target_col]
+        forecast_series = self.predict_resultdf['Predicted Forecast']
+        actual_values.index = dates
+        forecast_series.index = dates
+
+        # Filter out NaN values and unpack the forecast lists
+        valid_forecast_indices = forecast_series.dropna().index
+        forecasted_values = forecast_series.dropna().tolist()
+
+        # Determine the frequency of the DataFrame
+        date_diff = dates.diff().min()
+
+        # Step ahead forecast values and dates
+        step_ahead_values = [forecast[forecast_step_ahead - 1] for forecast in forecasted_values]
+        step_ahead_dates = valid_forecast_indices + (forecast_step_ahead - 1) * date_diff
+        step_ahead_values = pd.Series(step_ahead_values, index=step_ahead_dates)
         
+        actuals = []
+        predictions = []
+        for date in step_ahead_dates:
+            actuals.append(actual_values[date])
+            predictions.append(step_ahead_values[date])
         
-        raise NotImplementedError("Not yet implemented.")
+        # Calculate the MAE of the forecast
+        mae = np.mean(np.abs(np.array(predictions) - np.array(actuals)))
+
+        # Calculate the MAE of the one-step naive forecast (used as the scale factor)
+        naive_forecast_errors = np.abs(np.diff(actuals))
+        scale_factor = np.mean(naive_forecast_errors)
+
+        # Calculate the MASE
+        mase = mae / scale_factor 
+        
+        return mase
     
     def __get_result_df(self, dataframe : pd.DataFrame, raw_predictions : Prediction, num_time_series : int):
         
