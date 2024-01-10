@@ -17,6 +17,7 @@ from pytorch_forecasting.models.base_model import Prediction
 from lightning.pytorch.callbacks import EarlyStopping, LearningRateMonitor, TQDMProgressBar,StochasticWeightAveraging, Callback
 from lightning.pytorch.loggers import TensorBoardLogger
 import matplotlib.pyplot as plt
+from pytorch_forecasting.metrics import QuantileLoss, MAE, MASE, RMSE
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -195,6 +196,7 @@ class NHiTSTrainingWrapper:
     
     def train(self,
               learning_rate : float,
+              loss = MAE(),
               weight_decay : float = 1e-2,
               dropout : float = 0.1,
               seed : int = None,
@@ -258,6 +260,7 @@ class NHiTSTrainingWrapper:
             learning_rate=learning_rate,
             weight_decay=weight_decay,
             dropout=dropout,
+            loss=loss,
             log_interval=log_interval,
             log_val_interval=log_val_interval,
             backcast_loss_ratio=1.0
@@ -475,6 +478,9 @@ class NHiTSPredictionWrapper:
         plt.plot(actual_dates, actual_values, label='Actual Values', color='blue', linewidth=1)
         plt.plot(forecast_dates, forecast, color='red', label=f'Forecast', linewidth=1)
         
+        # Set the maximum number of x-axis ticks to 5
+        plt.gca().xaxis.set_major_locator(MaxNLocator(nbins=6))
+        
         plt.title(f'Actual Values with Forecast Values for time_idx {time_idx}')
         plt.xlabel('Date')
         plt.ylabel(self.target_col)
@@ -482,6 +488,9 @@ class NHiTSPredictionWrapper:
         plt.show()
     
     def get_average_mae_loss(self):
+        
+        
+        
         raise NotImplementedError("Not yet implemented.")
     
     def __get_result_df(self, dataframe : pd.DataFrame, raw_predictions : Prediction, num_time_series : int):
