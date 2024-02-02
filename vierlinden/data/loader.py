@@ -59,18 +59,14 @@ class VierlindenDataProcessor:
             Data prepared for the target variable.
         """
         
-        t = df.copy().drop(['Entleerung_RüB', 'Füllstand_RüB_1', 'Füllstand_RüB_2', 'Füllstand_RüB_3'], axis=1)
+        all_targets = ['Entleerung_RüB', 'Füllstand_RüB_1', 'Füllstand_RüB_2', 'Füllstand_RüB_3', 
+                       'Kaiserstr_outflow [l/s]', 'Kreuzweg_outflow [l/s]']
         
         # Filter out columns that contain other target variables than the one we want to predict
-        if target_col == 'Kaiserstr_outflow [l/s]':
-            prediction_ready_data = t.drop(['Kreuzweg_outflow [l/s]'], axis=1)
-        elif target_col == 'Kreuzweg_outflow [l/s]':
-            prediction_ready_data = t.drop(['Kaiserstr_outflow [l/s]'], axis=1)
-        elif target_col not in self.data.columns:
-            logger.error(f"Column {target_col} not found in data.")
-            return
-        else:
+        if target_col not in all_targets:
             raise ValueError('Column {target_col} is not a valid target variable.}')
+        else:
+            prediction_ready_data = df.copy().drop([col for col in all_targets if col != target_col], axis=1)
         
         return prediction_ready_data
     
