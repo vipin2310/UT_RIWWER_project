@@ -59,7 +59,7 @@ class VierlindenDataProcessor:
             Data prepared for the target variable.
         """
         
-        all_targets = ['Entleerung_RüB', 'Füllstand_RüB_1', 'Füllstand_RüB_2', 'Füllstand_RüB_3', 
+        all_targets = ['Füllstand_RRB', 'Entleerung_RüB', 'Füllstand_RüB_1', 'Füllstand_RüB_2', 'Füllstand_RüB_3', 
                        'Kaiserstr_outflow [l/s]', 'Kreuzweg_outflow [l/s]']
         
         # Filter out columns that contain other target variables than the one we want to predict
@@ -117,6 +117,66 @@ class VierlindenDataProcessor:
         """
         
         self.data.plot(x='Datetime', y=target_col, figsize=(10, 6))
+    
+    def apply_overflow_equation_to_target(self, target_col: str) -> pd.DataFrame:
+        """Applies the weir equation to the target variable.
+
+        Parameters
+        ----------
+        target_col : str
+            Name of the target column.
+
+        Returns
+        -------
+        pd.DataFrame
+            Data with the weir equation applied to the target variable.
+        """
+        
+        all_targets = ['Entleerung_RüB', 'Füllstand_RüB_1', 'Füllstand_RüB_2', 'Füllstand_RüB_3']
+        
+        # Apply weir equation to the target variable if it is a valid target column
+        if target_col not in all_targets:
+            raise ValueError('Column {target_col} is not a valid target variable.}')
+        else:
+            name = target_col + "_outflow [l/s]"
+            self.data[name] = self.data[target_col].apply(self.__apply_weir_equation)
+        
+        return self.data
+    
+    def __apply_weir_equation(self, h : float) -> float:
+        """
+        Copied from Peter's (Okeanos) repo.
+        
+        This function calculates outflow in l/s from RRK, RRB and RÜB, based on rectangular Weir hydraulic equation.
+        Q = Cd * (2/3) * (2g)^(1/2) * b * h^(3/2)
+        source ISO1438, page 11
+        where:
+        Q: overflow in m3/s
+        cd = 0.68: losses coefficient (no unit)
+        g = 9.81: gravity acceleration in m/s2
+        b = 1: weir depth in m
+        h: overflow depth in m
+
+        Parameters
+        ----------
+        h : float
+            Value of water level (RRK, RRB or RÜB).
+
+        Returns
+        -------
+        float
+            The overflow in l/s.
+        """
+        
+        # Weir parameters, see docstring for details
+        cd = 0.68
+        g = 9.81
+        b = 1
+        
+        q = cd * (2/3) * ((2*g)**(0.5)) * b * h**(1.5)
+        q_liter_per_sec = q * 1000 # from m3/s to l/s
+        
+        return q_liter_per_sec
     
     def __read_data(self) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """Reads sensor and target data from predefined file paths.
