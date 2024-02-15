@@ -72,7 +72,7 @@ class VierlindenDataProcessor:
     
     @staticmethod
     def split_data(df : pd.DataFrame, train_frac : float = 0.9) -> Tuple[pd.DataFrame, pd.DataFrame]:
-        """Splits the data into training and test set.
+        """Splits the data into training and test set. (Not random)
 
         Parameters
         ----------
@@ -132,7 +132,7 @@ class VierlindenDataProcessor:
             Data with the weir equation applied to the target variable.
         """
         
-        all_targets = ['Entleerung_RüB', 'Füllstand_RüB_1', 'Füllstand_RüB_2', 'Füllstand_RüB_3']
+        all_targets = ['Füllstand_RRB', 'Entleerung_RüB', 'Füllstand_RüB_1', 'Füllstand_RüB_2', 'Füllstand_RüB_3']
         
         # Apply weir equation to the target variable if it is a valid target column
         if target_col not in all_targets:

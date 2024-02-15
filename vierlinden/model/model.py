@@ -487,7 +487,7 @@ class NHiTSPredictionWrapper:
         plt.legend()
         plt.show()
     
-    def calculate_mase_loss(self, forecast_step_ahead : int = 1):
+    def calculate_mase_loss(self, forecast_step_ahead : int = 1) -> float:
         if self.predict_resultdf is None:
             raise Exception("No prediction result available. Please use predict() first.")
         
