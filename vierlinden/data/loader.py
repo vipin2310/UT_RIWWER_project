@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 import logging
-from vierlinden.config import data_path, target_filename, sensor_filename
+from vierlinden.config import data_path, data_filename
 from pytorch_forecasting import TimeSeriesDataSet
 from typing import Tuple
 
@@ -37,10 +37,11 @@ class VierlindenDataProcessor:
         if self.data is not None and self.processed:
             return self.data
         
-        sensor_data, target_data = self.__read_data()
-        all_data = self.__merge_data(sensor_data, target_data)
+        all_data = self.__read_data()
+        all_data = self.__process_datetime(all_data)
         self.data = self.__process_nan(all_data)
         
+        self.processed = True
         logger.info("Data loaded and processed successfully.")
         
         return self.data
@@ -59,16 +60,9 @@ class VierlindenDataProcessor:
             Data prepared for the target variable.
         """
         
-        all_targets = ['Füllstand_RRB', 'Entleerung_RüB', 'Füllstand_RüB_1', 'Füllstand_RüB_2', 'Füllstand_RüB_3', 
-                       'Kaiserstr_outflow [l/s]', 'Kreuzweg_outflow [l/s]']
+        # TODO: Add preparation if needed
         
-        # Filter out columns that contain other target variables than the one we want to predict
-        if target_col not in all_targets:
-            raise ValueError('Column {target_col} is not a valid target variable.}')
-        else:
-            prediction_ready_data = df.copy().drop([col for col in all_targets if col != target_col], axis=1)
-        
-        return prediction_ready_data
+        return df
     
     @staticmethod
     def split_data(df : pd.DataFrame, train_frac : float = 0.9) -> Tuple[pd.DataFrame, pd.DataFrame]:
@@ -107,24 +101,26 @@ class VierlindenDataProcessor:
         except Exception as e:
             logger.error(f"Error exporting data to {output_path}: {e}")
             
-    def plot_target_col(self, target_col: str):
-        """Plots the target variable against Datetime.
+    def plot_target_col(self, column: str):
+        """Plots a column against Datetime.
 
         Parameters
         ----------
-        target_col : str
-            Name of the target column.
+        column : str
+            Name of column.
         """
         
-        self.data.plot(x='Datetime', y=target_col, figsize=(10, 6))
+        self.data.plot(x='Datetime', y=column, figsize=(10, 6))
     
-    def apply_overflow_equation_to_target(self, target_col: str) -> pd.DataFrame:
-        """Applies the weir equation to the target variable.
+    def apply_overflow_statistic_to_column(self, column: str) -> pd.DataFrame:
+        """Applies the overflow statistics to a column of the data.
+        Its meant to take the 90th percentile as threshold and count above that as overflow.
+        After that the weir equation is applied to the overflow to calculate outflow in l/s.
 
         Parameters
         ----------
-        target_col : str
-            Name of the target column.
+        column : str
+            Name of the column.
 
         Returns
         -------
@@ -132,18 +128,12 @@ class VierlindenDataProcessor:
             Data with the weir equation applied to the target variable.
         """
         
-        all_targets = ['Füllstand_RRB', 'Entleerung_RüB', 'Füllstand_RüB_1', 'Füllstand_RüB_2', 'Füllstand_RüB_3']
-        
-        # Apply weir equation to the target variable if it is a valid target column
-        if target_col not in all_targets:
-            raise ValueError('Column {target_col} is not a valid target variable.}')
-        else:
-            name = target_col + "_outflow [l/s]"
-            self.data[name] = self.data[target_col].apply(self.__apply_weir_equation)
+        name = column + "_outflow [l/s]"
+        self.data[name] = self.data[column].apply(self.__weir_equation)
         
         return self.data
     
-    def __apply_weir_equation(self, h : float) -> float:
+    def __weir_equation(self, h : float) -> float:
         """
         Copied from Peter's (Okeanos) repo.
         
@@ -178,53 +168,45 @@ class VierlindenDataProcessor:
         
         return q_liter_per_sec
     
-    def __read_data(self) -> Tuple[pd.DataFrame, pd.DataFrame]:
-        """Reads sensor and target data from predefined file paths.
-
-        Returns
-        -------
-        Tuple[pd.DataFrame, pd.DataFrame]
-            Tuple of sensor and target data.
-        """
-        
-        try:
-            sensor_data = pd.read_csv(data_path + "/" + sensor_filename, sep=",")
-            target_data = pd.read_csv(data_path + "/" +  target_filename, sep=",")
-            logger.info(f"Data loaded successfully from {data_path}")
-            return sensor_data, target_data
-        except FileNotFoundError:
-            logger.error(f"File not found, please check data path: {data_path}")
-        except Exception as e:
-            logger.error(f"Error loading data from {data_path}: {e}")
-
-    def __merge_data(self, sensor_data: pd.DataFrame, target_data: pd.DataFrame) -> pd.DataFrame:
-        """Merges sensor and target data on a common timestamp.
-
-        Parameters
-        ----------
-        sensor_data : pd.DataFrame
-            DataFrame containing sensor data.
-        target_data : pd.DataFrame
-            DataFrame containing target data.
+    def __read_data(self) -> pd.DataFrame:
+        """Reads data from predefined file path.
 
         Returns
         -------
         pd.DataFrame
-            Merged data.
+            Data
         """
         
         try:
-            # Convert to datetime type
-            sensor_data['Datetime'] = pd.to_datetime(sensor_data['Datetime'])
-            target_data['Timestamp'] = pd.to_datetime(target_data['Timestamp'])
-            
-            # Merge
-            merged_data = pd.merge(sensor_data, target_data, left_on='Datetime', right_on='Timestamp', how='left')
-            merged_data.drop(columns=['Timestamp'], inplace=True)
-            logger.info("Sensor and target data merged successfully.")
-            return merged_data
+            data = pd.read_csv(data_path + "/" + data_filename, sep=",")
+            logger.info(f"Data loaded successfully from {data_path}")
+            return data
+        except FileNotFoundError:
+            logger.error(f"File not found, please check data path: {data_path}")
         except Exception as e:
-            logger.error(f"Error merging data: {e}")
+            logger.error(f"Error loading data from {data_path}: {e}")
+            
+    def __process_datetime(self, all_data: pd.DataFrame) -> pd.DataFrame:
+        """Processes the datetime column in the dataset.
+
+        Parameters
+        ----------
+        all_data : pd.DataFrame
+            The dataset with a datetime column.
+
+        Returns
+        -------
+        pd.DataFrame
+            Dataset with processed datetime column.
+        """
+        
+        df = all_data.copy()
+        
+        # Convert datetime column to datetime type
+        df['Datetime'] = pd.to_datetime(df['Datetime'])
+        logger.info("Datetime processed successfully.")
+        
+        return df
 
     def __process_nan(self, all_data: pd.DataFrame) -> pd.DataFrame:
         """Processes NaN values in the dataset.
@@ -240,52 +222,6 @@ class VierlindenDataProcessor:
             Dataset with NaN values processed.
         """
         
-        # Fill NaN values in Niederschlage (rainfall) column
-        all_data['Niederschlag'] = all_data['Niederschlag'].fillna(0)
+        # TODO: Add NaN processing
         
-        # Fill NaN values in target data with 0
-        all_data['Kaiserstr_outflow [l/s]'] = all_data['Kaiserstr_outflow [l/s]'].fillna(0)
-        all_data['Kreuzweg_outflow [l/s]'] = all_data['Kreuzweg_outflow [l/s]'].fillna(0)
-        
-        data_removed_highnan_cols = self.__remove_high_nan_cols(all_data)
-        
-        # Find the first index where all columns have non-missing data
-        first_valid_index = data_removed_highnan_cols.dropna().index[0]
-        trimmed_data = data_removed_highnan_cols.loc[first_valid_index:, :]
-        
-        # Impute the missing values using linear interpolation
-        # For this it is important that the timeseries which it is evenly spaced
-        complete_data = trimmed_data.interpolate(method='linear')
-        complete_data['Datetime'] = pd.to_datetime(complete_data['Datetime'])
-        
-        logger.info("NaN values processed successfully.")
-        
-        return complete_data
-    
-    def __remove_high_nan_cols(self, all_data: pd.DataFrame) -> pd.DataFrame:
-        """Removes columns with a high proportion of NaN values from the dataset.
-
-        Parameters
-        ----------
-        all_data : pd.DataFrame
-            The dataset to be processed.
-
-        Returns
-        -------
-        pd.DataFrame
-            Dataset with high NaN columns removed.
-        """
-        
-        # Remove columns with high proportion of missing values
-        data_with_removed_highnans = all_data.drop(
-            ["Durchfluss SWP1 und SWP2_pval",
-            "FLP_Hohenstand_Pumpensumpf_pval",
-            "FLP_Strom_P3_pval",
-            "FLP_Strom_P4_pval",
-            "FLP_Strom_P5_pval",
-            "FLP_Hohenstand_Becken1_pval",
-            "FLP_Hohenstand_Becken3_pval",
-            "FLP_Hohenstand_Beckne2_pval"], 
-            axis=1)
-        
-        return data_with_removed_highnans
+        return all_data

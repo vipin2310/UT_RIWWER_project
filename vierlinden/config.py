@@ -1,5 +1,4 @@
-data_path = "/storage/projects/RIWWER/data/Vierlinden"
-model_output_path = "/storage/projects/RIWWER/model_output/Vierlinden"
+data_path = "E:/Users/Vipin/Documents/BHT/CalgoLab/RIWWER/data"
+model_output_path = "E:/Users/Vipin/Documents/BHT/CalgoLab/RIWWER/model_output"
 
-target_filename = "overflow_Vierlinden_2021.csv"
-sensor_filename = "Vierlinden_2021_All.csv"
+data_filename = "Vierlinden_2021_All.csv"
