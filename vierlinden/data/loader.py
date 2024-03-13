@@ -177,12 +177,14 @@ class VierlindenDataProcessor:
             Data
         """
         
+        filepath = data_path + "/" + data_filename
+        
         try:
-            data = pd.read_csv(data_path + "/" + data_filename, sep=",")
+            data = pd.read_csv(filepath, sep=",")
             logger.info(f"Data loaded successfully from {data_path}")
             return data
         except FileNotFoundError:
-            logger.error(f"File not found, please check data path: {data_path}")
+            logger.error(f"File {filepath} not found, please check data path: {data_path}")
         except Exception as e:
             logger.error(f"Error loading data from {data_path}: {e}")
             
