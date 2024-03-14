@@ -65,13 +65,15 @@ class VierlindenDataProcessor:
         return df
     
     @staticmethod
-    def split_data(df : pd.DataFrame, train_frac : float = 0.9) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    def split_data(df : pd.DataFrame, split_date : str = '', train_frac : float = 0.9) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """Splits the data into training and test set. (Not random)
 
         Parameters
         ----------
+        split_date : str, optional
+            The cutoff date for the split, by default ''. Will be used if not empty. Splitting asuming the data is sorted by date.
         train_size : float, optional
-            Fraction of data to use for training, by default 0.9
+            Fraction of data to use for training, by default 0.9. Will only be used if split_date is empty.
 
         Returns
         -------
@@ -79,7 +81,11 @@ class VierlindenDataProcessor:
             Tuple of training and validation data.
         """
         
-        training_cutoff = int(round(len(df) * train_frac))
+        if split_date != '':
+            split_date = pd.to_datetime(split_date)
+            training_cutoff = df[df['Datetime'] < split_date].shape[0]
+        else:
+            training_cutoff = int(round(len(df) * train_frac))
         
         train_data = df[:training_cutoff].copy()
         test_data = df[training_cutoff:].copy()
@@ -111,6 +117,27 @@ class VierlindenDataProcessor:
         """
         
         self.data.plot(x='Datetime', y=column, figsize=(10, 6))
+    
+    def remove_nan_flag_cols(self, all_data: pd.DataFrame) -> pd.DataFrame:
+        """Removes columns that were added to indicate filled missing values, identified by the '_was_nan' suffix.
+    
+        Parameters
+        ----------
+        all_data : pd.DataFrame
+            The DataFrame from which to remove the nan indicator columns.
+    
+        Returns
+        -------
+        pd.DataFrame
+            The DataFrame without the nan indicator columns.
+        """
+        # List comprehension to find columns with '_was_nan' suffix
+        columns_to_remove = [col for col in all_data.columns if col.endswith('_was_nan')]
+    
+        # Drop these columns from the DataFrame
+        all_data_cleaned = all_data.copy().drop(columns=columns_to_remove)
+    
+        return all_data_cleaned
     
     def apply_overflow_statistic_to_column(self, column: str) -> pd.DataFrame:
         """Applies the overflow statistics to a column of the data.
@@ -211,19 +238,46 @@ class VierlindenDataProcessor:
         return df
 
     def __process_nan(self, all_data: pd.DataFrame) -> pd.DataFrame:
-        """Processes NaN values in the dataset.
-
+        """Fills missing values by interpolating, and for initial and trailing NaNs, uses backward and forward fill respectively.
+        Adds a column if the missing value was filled, indicating the fill operation.
+                
         Parameters
         ----------
         all_data : pd.DataFrame
-            The dataset with potential NaN values.
-
+            DataFrame containing the data to process.
+        
         Returns
         -------
         pd.DataFrame
-            Dataset with NaN values processed.
+            DataFrame with missing values filled and additional columns for interpolation flags.
         """
+        # Make a copy of the data to avoid modifying the original DataFrame
+        df = all_data.copy()
         
-        # TODO: Add NaN processing
-        
-        return all_data
+        # Iterate over each column in the DataFrame
+        for col in df.columns:
+            # Check if the column contains any missing values
+            if df[col].isnull().any():
+                # Create a boolean flag column to indicate where NaNs were before filling
+                flag_column_name = f"{col}_was_nan"
+                df[flag_column_name] = df[col].isnull()
+                
+                # Interpolate missing values
+                df[col] = df[col].interpolate(method='linear', limit_direction='forward', axis=0)
+                
+                # Then apply backward fill for remaining NaNs at the start
+                df[col] = df[col].bfill()
+                
+                # Then apply forward fill for remaining NaNs at the end
+                df[col] = df[col].ffill()
+                
+                # Ensure the flag column is inserted right after the current column
+                # Find current column index
+                col_index = df.columns.get_loc(col)
+                # Move the flag column to the right position
+                cols = df.columns.tolist()
+                # Remove the flag column from its original position and insert it after the current column
+                cols.insert(col_index + 1, cols.pop(cols.index(flag_column_name)))
+                df = df[cols]
+                
+        return df

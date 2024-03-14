@@ -155,10 +155,14 @@ class NHiTSTrainingWrapper:
         
         self.train_loader = self.training_data.to_dataloader(train=True, 
                                                         batch_size=batch_size, 
-                                                        num_workers=num_workers)
+                                                        num_workers=num_workers,
+                                                        persistent_workers=True,
+                                                        pin_memory=True)
         self.validation_loader = self.validation_data.to_dataloader(train=False, 
                                                                batch_size=batch_size, 
-                                                               num_workers=num_workers)
+                                                               num_workers=num_workers,
+                                                               persistent_workers=True,
+                                                               pin_memory=True)
         
         logger_internal.info("Training and validation data and data loaders created successfully.")
         
