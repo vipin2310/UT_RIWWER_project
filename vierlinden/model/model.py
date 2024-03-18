@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 import lightning.pytorch as pl
 from lightning.pytorch.tuner import Tuner
+from sqlalchemy import intersect
 import torch
 import logging
 import shutil
@@ -134,6 +135,59 @@ class MetricCollectionCallback(Callback):
         if val_loss is not None:
             self.metrics["val_loss"].append(val_loss.cpu().detach().item())
 
+class MovingAverageBaseline:
+    
+    def __init__(self, data : pd.DataFrame, window_size: int, target_col: str, forecast_step_ahead: int):
+        self.data = data
+        self.result_df = None
+        self.forecast_col_name = f'Estimated {target_col}'
+        
+        # Params
+        self.window_size = window_size
+        self.target_col = target_col
+        self.prediction_length = forecast_step_ahead
+        
+    
+    def predict(self) -> pd.DataFrame:        
+        self.result_df = self.data.copy()
+        self.result_df[self.forecast_col_name] = self.result_df[self.target_col].rolling(window=self.window_size).mean().shift(self.prediction_length)
+        self.predicted = True
+        
+        return self.result_df
+    
+    def calculate_mase(self) -> float:
+        
+        if self.result_df is None:
+            self.predict()
+        
+        # Calculate the MAE of the forecast
+        mae = np.nanmean(np.abs(np.array(self.result_df[self.forecast_col_name]) - np.array(self.result_df[self.target_col])))
+
+        # Calculate the MAE of the one-step naive forecast (used as the scale factor)
+        naive_forecast_errors = np.abs(np.diff(np.array(self.result_df[self.target_col])))
+        scale_factor = np.mean(naive_forecast_errors)
+
+        # Check for division by zero possibility
+        if scale_factor == 0:
+            logger_internal.warning("Scale factor for MASE calculation is zero, indicating no variation in target data. Returning MAE instead.")
+            return mae
+        
+        # Calculate the MASE
+        mase = mae / scale_factor
+        
+        return mase
+    
+    def plot_forecast(self):
+        
+        # Plotting
+        plt.figure(figsize=(10, 6))
+        
+        plt.plot(self.result_df['Datetime'], self.result_df[self.target_col], label='Actual Values', color='blue', linewidth=1)
+        plt.plot(self.result_df['Datetime'], self.result_df[self.forecast_col_name], color='red', label=f'Forecast', linewidth=1)
+        plt.title(f'Actual Values with Estimated Values by MA (window_size={self.window_size})')
+                
+        plt.show()
+        
 class NHiTSTrainingWrapper:
     
     def __init__(self, 
@@ -276,6 +330,102 @@ class NHiTSTrainingWrapper:
             net,
             train_dataloaders=self.train_loader,
             val_dataloaders=self.validation_loader
+        )
+        
+        logger_internal.info("Training procedure completed.")
+        
+        self.final_trainer = trainer
+        self.best_model = NHiTS.load_from_checkpoint(trainer.checkpoint_callback.best_model_path)
+
+        # Clean up logs
+        if clean_up_logging:
+            logger_internal.info("Cleaning up logging files.")
+            shutil.rmtree(log_dir)
+            logger_internal.info("Logging files cleaned up.")
+        
+        return self.best_model
+    
+    def continue_training_from_ckpt(self, 
+              ckpt_path : str,
+              learning_rate : float,
+              loss = MAE(),
+              weight_decay : float = 1e-2,
+              dropout : float = 0.1,
+              seed : int = None,
+              max_epochs : int = 100,
+              accelerator = "gpu",
+              devices = 1,
+              gradient_clip_val=0.01,
+              use_early_stopping : bool = True,
+              early_stopping_delta : float = 1e-4,
+              early_stopping_patience : int = 10,
+              limit_train_batches : float = None,
+              enable_model_summary : bool = True,
+              clean_up_logging : bool = True,
+              logging_steps : int = 5) -> NHiTS:
+        
+        
+        logger_internal.info("Start setting up trainer and network.")
+        self.metrics_callback = MetricCollectionCallback()
+        
+        if seed is not None:
+            pl.seed_everything(seed)
+            
+        if accelerator == "gpu":
+            device = torch.device('cuda:0')
+        else:
+            device = torch.device('cpu')
+        
+        callbacks=[]
+        
+        if use_early_stopping:
+            callbacks.append(EarlyStopping(monitor="val_loss", 
+                                       min_delta=early_stopping_delta, 
+                                       patience=early_stopping_patience, 
+                                       verbose=True, 
+                                       mode="min"))
+        
+        callbacks.append(LearningRateMonitor(logging_interval='step'))
+        callbacks.append(TQDMProgressBar())
+        callbacks.append(self.metrics_callback)
+        callbacks.append(StochasticWeightAveraging(swa_lrs=learning_rate,swa_epoch_start=5, device=device))
+        
+        log_interval = logging_steps
+        log_every_n_steps = logging_steps
+        log_val_interval = 1
+        log_dir = model_output_path + "/" + "training_logs"
+        logger = TensorBoardLogger(log_dir)
+        
+        trainer = pl.Trainer(
+            max_epochs=max_epochs,
+            accelerator=accelerator,
+            devices = devices,
+            enable_model_summary=enable_model_summary,
+            gradient_clip_val=gradient_clip_val,
+            callbacks=callbacks,
+            limit_train_batches=limit_train_batches,
+            log_every_n_steps=log_every_n_steps,
+            logger = logger
+        )
+        
+        net = NHiTS.from_dataset(
+            self.training_data,
+            learning_rate=learning_rate,
+            weight_decay=weight_decay,
+            dropout=dropout,
+            loss=loss,
+            log_interval=log_interval,
+            log_val_interval=log_val_interval,
+            backcast_loss_ratio=1.0
+        )
+        
+        logger_internal.info("Setup succesful. Starting training procedure.")
+        
+        trainer.fit(
+            net,
+            train_dataloaders=self.train_loader,
+            val_dataloaders=self.validation_loader,
+            ckpt_path=ckpt_path
         )
         
         logger_internal.info("Training procedure completed.")
@@ -516,7 +666,7 @@ class NHiTSPredictionWrapper:
         
         actuals = []
         predictions = []
-        for date in step_ahead_dates:
+        for date in np.intersect1d(dates.values, step_ahead_dates.values):
             actuals.append(actual_values[date])
             predictions.append(step_ahead_values[date])
         
