@@ -1,13 +1,9 @@
-from contextlib import contextmanager
-from io import StringIO
-import sys
 from typing import Tuple
 from matplotlib.ticker import MaxNLocator
 import numpy as np
 import pandas as pd
 import lightning.pytorch as pl
 from lightning.pytorch.tuner import Tuner
-from sqlalchemy import intersect
 import torch
 import logging
 import shutil
@@ -19,6 +15,7 @@ from lightning.pytorch.callbacks import EarlyStopping, LearningRateMonitor, TQDM
 from lightning.pytorch.loggers import TensorBoardLogger
 import matplotlib.pyplot as plt
 from pytorch_forecasting.metrics import QuantileLoss, MAE, MASE, RMSE
+import dill as pickle
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -446,12 +443,22 @@ class NHiTSTrainingWrapper:
             raise Exception("No best model available. Please train the model first.")
         
         self.final_trainer.save_checkpoint(path)
+        
+        # Remove the checkpoint file extension
+        path = path.split(".")[0]
+        with(open(path + "wrapper.pkl", "wb")) as f:
+            pickle.dump(self, f)       
     
     @staticmethod
     def load_trained_model(path : str) -> NHiTS:
         best_model = NHiTS.load_from_checkpoint(path)
         
         return best_model
+    
+    @staticmethod
+    def load_model_wrapper(path : str) -> 'NHiTSTrainingWrapper':
+        with(open(path, "rb")) as f:
+            return pickle.load(f)
     
     def print_training_evaluation(self):
         if self.final_trainer is None:
